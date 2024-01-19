@@ -2,7 +2,8 @@
 
 In this repository, you will find examples of how to read in information from netCDF files containing data from Coupled Model Intercomparison Project phase 6 (CMIP6) simulations, and perform basic visualizations using these data.
 
-This is a companion repository to the Climate DataLab web tutorial"
+This is a companion repository to the Climate DataLab web tutorial:
+
 http://climate-datalab.org/cmip6-walkthrough/
 
 The contents of the repository are:
