@@ -1,0 +1,208 @@
+---
+title: "Climate model_demo"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## How to Read Climate Model Data in R
+
+This is a brief introduction to the R libraries and commands you'll need to read in and analyze output from climate/Earth system models. There are many other resources out there, if you'd like more information! I particularly like this set of tutorials, from the "R for Earth System Science" course at the University of Oregon:
+https://pjbartlein.github.io/REarthSysSci/netCDF.html
+
+The commands needed for manipulating netCDF files are contained in the "ncdf4" package in R, make sure this is loaded!
+
+This example assumes that we have already downloaded a netCDF file; I will provide examples here of how to work with multiple data files from the US Department of Energy's Exascale Earth System Model version 1, or E3SMv1. This will show you how to go about stitching together data from multiple files since that's a pretty common task one needs to carry out when working with these models. 
+
+
+NOTE: The "ncpath" variable below should be set to the directory where the netCDF file is located on YOUR computer!
+
+```{r readcesm}
+library(lubridate)
+library(ggplot2)
+library(tidyverse)
+library(chron)
+library(ncdf4)
+library(RColorBrewer)
+library(lattice)
+library(abind)
+
+# path and filename for data
+ncpath <- "~/Box Sync/Courses_UCSB/ESM237_Winter2024/"   # path (directory)
+dname <- "tas"  # this is the name of the variable you want to look at
+
+ncname1 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_185001-187412.nc"  # E3SM filename
+ncname2 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_187501-189912.nc"  # E3SM filename
+
+ncfname1 <- paste(ncpath, ncname1, sep="")
+ncfname2 <- paste(ncpath, ncname2, sep="")
+
+ncin_e3sm1 <- nc_open(ncfname1)
+ncin_e3sm2 <- nc_open(ncfname2)
+
+
+```
+
+
+Using the print command, we can see some of the basic information about the data ("metadata"), like units, coordinates, etc.
+
+The next thing we need to do is to actually read in the data! This is done with the "ncvar_get" command. Let's start with the time, latitude, and longitude coordinates: since tas is a two-dimensional variable, these are the only coordinates needed. If you want to work with 3D fields like ocean temperature, winds, or soil moisture, then you'll also need an additional vertical coordinate (again, "print" is your friend to find out what those are called).
+
+The following commands read in the longitude and latitude information, and store the lengths of each axis in variables 'nlon' and 'nlat'. Here I am just going to use the first file to do this: since all the files are coming from the same model, the lat and lon values should be the same across all files (though it's always good to double-check that sort of thing!). 
+
+```{r readcoords}
+lon <- ncvar_get(ncin_e3sm1,"lon")
+nlon <- dim(lon)
+lat <- ncvar_get(ncin_e3sm1,"lat")
+nlat <- dim(lat)
+
+# Display the first couple entries in the lat and lon arrays
+head(lat)
+head(lon)
+
+```
+
+You could imagine doing the same thing with the time coordinate! This can get a little messy sometimes since the calendar used by climate models doesn't always correspond to a "normal" calendar - later on in this document, I'll show you how to simply generate your own time axis to make things simpler.
+
+For now, let's read in the temperature data! This may take a while, depending on your computer and the size of the data file. It's also a good idea to get some attributes of the data: the full name ("long_name"), units, and the value used to fill in places where there are no data ("_FillValue"). 
+
+```{r readtemp}
+tas1 <- ncvar_get(ncin_e3sm1, "tas")
+dlname <- ncatt_get(ncin_e3sm1,dname,"long_name")
+dunits <- ncatt_get(ncin_e3sm1,dname,"units")
+fillvalue <- ncatt_get(ncin_e3sm1,dname,"_FillValue")
+```
+
+You can use concatenation to stick the temperature data together as well: here I'm using the "abind" package to do this, where the "along" argument tells R which dimension to concatentate the arrays along. This comes in especially handy when you're trying to build long time series, since you'll often need many more than two files!
+
+```{r read_e3smtemp}
+tas2 <- ncvar_get(ncin_e3sm2, "tas")
+
+tas=abind(tas1,tas2,along=3)
+```
+
+
+Now we have temperature loaded in and ready to be processed; the dimensions of the "tas" array are [lat x lon x time]. We can use this to make a time series of regionally averaged data from a particular location of interest. To do this, select the parts of the data matrix corresponding to the latitudes and longitudes in your region (note: it's also possible to do this with a shapefile, if you have a spatially complex region).
+
+Let's plot a box covering parts of southern California: 32-35N, 117-119W. **note: you'll also need to pay attention to whether the longitudes in the model are given in degrees E (0 to 360) or degrees W and E (-180 to 180). E3SM uses 0-360 coordinates, so the longitude range we want is 241-243E.
+
+The R 'apply' function lets us compute the average over the region easily; here we specify 3 as the dimension over which to apply the mean, and this applies the average over all values corresponding to each time. As a bonus, I've also used the 'group_by' and 'summarize' functions to create annual temperatures from this data before plotting the time series; you can also just plot the raw monthly values if you prefer.
+
+```{r getregion}
+lats=which(lat >= 32 & lat <= 35)
+lons=which(lon >= 241 & lon <= 243)
+
+tsavg <- apply(tas[lons,lats,],3,mean)
+```
+
+The 'tsavg' object now contains regionally averaged temperature information from both data files! But to plot it as a time series, we need to give R information about the time coordinate. I'm going to use a small hack here, since sometimes the starting points of the time array can change from file to file, which can get annoying to deal with and it's easier to just make a new time axis. 
+
+I'll use the "seq.Date" method to create a sequence of dates ranging from January 1, 1850 to December 31, 1899 (the start/end dates listed in the set of filenames):
+
+```{r e3smtime}
+rtime_e3sm=seq.Date(as.Date("1850/01/01"),as.Date("1899/12/01"),by="months")
+
+```
+
+Now we can build the time series! I'll do this for annual temperature, in order to illustrate the use of the R "group_by" and "summarize" functionalities. The code below groups all the time data by year, then summarizes this data by calculating an average for each year:
+
+```{r tseries}
+clim <- data.frame(time=rtime_e3sm, tsavg=tsavg)
+yrclim = clim %>% group_by(year(rtime_e3sm)) %>% summarize(Tann=mean(tsavg))
+yrclim$dt = unique(year(rtime_e3sm))
+
+# make plot (Note: subtract 273.15 to convert Kelvin to Celsius temperatures)
+ggplot(yrclim, aes(dt, Tann-273.15))+geom_point()+labs(y="Southern CA Temperature (deg C)", x="Year")+ geom_smooth(method="lm")
+```
+
+
+
+
+Part 2: Combining Historical and SSP Information 
+
+The concatenation trick demonstrated in Part 2 is also a very useful way of COMBINING historical and SSP information into a handy SINGLE curve. Here is an example of how to do this for a full set of E3SM files: the two historical ones used above, as well as files containing the rest of the historical period and information on SSP585 from the same ensemble member.
+
+```{r reade3sm_ssp}
+# paths and filenames for ALL historical and SSP data
+ncpath <- "~/Box Sync/Courses_UCSB/ESM237_Winter2024/"   # path (directory)
+dname <- "tas"  # this is the name of the variable you want to look at
+
+ncname1 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_185001-187412.nc"  # E3SM filename
+ncname2 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_187501-189912.nc"  # E3SM filename
+ncname3 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_190001-192412.nc"
+ncname4 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_192501-194912.nc"
+ncname5 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_195001-197412.nc"
+ncname6 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_197501-199912.nc"
+ncname7 <- "tas_Amon_E3SM-1-0_historical_r1i1p1f1_gr_200001-201412.nc"
+ncname8 <- "tas_Amon_E3SM-1-0_ssp585_r1i1p1f1_gr_201501-206412.nc"
+ncname9 <- "tas_Amon_E3SM-1-0_ssp585_r1i1p1f1_gr_206501-209912.nc"
+
+# Concatenate path and filename to get complete location of files
+ncfname1 <- paste(ncpath, ncname1, sep="")
+ncfname2 <- paste(ncpath, ncname2, sep="")
+ncfname3 <- paste(ncpath, ncname3, sep="")
+ncfname4 <- paste(ncpath, ncname4, sep="")
+ncfname5 <- paste(ncpath, ncname5, sep="")
+ncfname6 <- paste(ncpath, ncname6, sep="")
+ncfname7 <- paste(ncpath, ncname7, sep="")
+ncfname8 <- paste(ncpath, ncname8, sep="")
+ncfname9 <- paste(ncpath, ncname9, sep="")
+
+# Open all files
+ncin_e3sm1 <- nc_open(ncfname1)
+ncin_e3sm2 <- nc_open(ncfname2)
+ncin_e3sm3 <- nc_open(ncfname3)
+ncin_e3sm4 <- nc_open(ncfname4)
+ncin_e3sm5 <- nc_open(ncfname5)
+ncin_e3sm6 <- nc_open(ncfname6)
+ncin_e3sm7 <- nc_open(ncfname7)
+ncin_e3sm8 <- nc_open(ncfname8)
+ncin_e3sm9 <- nc_open(ncfname9)
+
+# Get tas information from all files
+tas1 <- ncvar_get(ncin_e3sm1, "tas")
+tas2 <- ncvar_get(ncin_e3sm2, "tas")
+tas3 <- ncvar_get(ncin_e3sm3, "tas")
+tas4 <- ncvar_get(ncin_e3sm4, "tas")
+tas5 <- ncvar_get(ncin_e3sm5, "tas")
+tas6 <- ncvar_get(ncin_e3sm6, "tas")
+tas7 <- ncvar_get(ncin_e3sm7, "tas")
+tas8 <- ncvar_get(ncin_e3sm8, "tas")
+tas9 <- ncvar_get(ncin_e3sm9, "tas")
+
+# Concatenate tas information along the time dimension 
+tas=abind(tas1,tas2,tas3,tas4,tas5,tas6,tas7,tas8,tas9,along=3)
+
+```
+
+The code chunk above has now built us a dataframe containing ALL of the "tas" data for the entire 1850-2100 period! Now we can go ahead and process this information to extract the regional time series for the location of interest. 
+
+As above, I'll use the "seq.Date" method to create a sequence of dates ranging from January 1, 1850 to December 31, 2099 (the start/end dates listed in the set of filenames):
+
+```{r e3smtime_ssp}
+rtime_e3sm=seq.Date(as.Date("1850/01/01"),as.Date("2099/12/01"),by="months")
+
+```
+
+Now we can redo the lat/lon regional extraction:
+```{r getreg_e3sm}
+lats=which(lat >= 32 & lat <= 35)
+lons=which(lon >= 241 & lon <= 243)
+
+
+tsavg_e3sm <- apply(tas[lons,lats,],3,mean)
+```
+
+and regenerate the plot:
+
+```{r tseries_21st}
+clim <- data.frame(time=rtime_e3sm, tsavg=tsavg_e3sm)
+yrclim = clim %>% group_by(year(rtime_e3sm)) %>% summarize(Tann=mean(tsavg))
+yrclim$dt = unique(year(rtime_e3sm))
+
+# make plot (Note: subtract 273.15 to convert Kelvin to Celsius temperatures)
+ggplot(yrclim, aes(dt, Tann-273.15))+geom_point()+labs(y="Southern CA Temperature (deg C)", x="Year")+ geom_smooth(method="lm")
+```
+
