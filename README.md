@@ -8,3 +8,4 @@ http://climate-datalab.org/cmip6-walkthrough/
 
 The contents of the repository are:
 - Climatemodel_demo_CanESM5.Rmd: R Markdown document containing commands for reading in data from the Canadian Earth System Model version 5 (CanESM5) and generating basic map and time series plots from this information
+- Climatemodel_demo_histtofuture.Rmd: R Markdown document containing commands for reading in multiple data files from the Energy Exascale Earth System Model version 1 (E3SMv1), concatenating these along the time dimension, and generating time series plots
